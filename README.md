@@ -19,6 +19,10 @@ A structured benchmark for OpenClaw agents. Each test runs in an **isolated sess
 | 2 | Multi-Step Single Domain | 5/5 ✅ |
 | 3 | Cross-Tool Agentic | 2/2 ✅ |
 | 4 | Full Research Pipeline | 1/1 ✅ |
+| 5 | Adversarial / Edge Cases | 5/5 ✅ |
+| 6 | Domain-Specific | 4/4 ✅ |
+| — | Stress Test (Tier 0+1 × 3 runs) | 36/36 ✅ |
+| **Total** | | **32/32 ✅** |
 
 Full write-up: [How to run OpenClaw with a local Qwen model](https://gist.github.com/TheAIHorizon/37c30e375f2ce08e726e4bb6347f26b1)
 
