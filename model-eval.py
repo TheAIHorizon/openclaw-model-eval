@@ -466,8 +466,8 @@ TESTS = [
         "prompt": (
             "[EVAL TEST — fresh isolated task, ignore prior context]\n"
             "Classify this job market signal into the correct task cluster.\n\n"
-            "Signal: 'Microsoft lays off 1,500 software engineers; cites AI copilot tools '
-            'automating code review and testing tasks previously done by junior developers.'\n\n"
+            "Signal: 'Microsoft lays off 1,500 software engineers; cites AI copilot tools "
+            "automating code review and testing tasks previously done by junior developers.'\n\n"
             "Choose exactly ONE from these clusters:\n"
             "offensive_security, ai_security, cloud_devops, data_analysis, "
             "network_defense, identity_access, compliance_risk, incident_response, "
