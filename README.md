@@ -109,42 +109,76 @@ No external tools. Structured reasoning tasks. Runs anywhere Tier 0 runs.
 
 ### SearXNG setup
 
-SearXNG is a self-hosted search engine required for T1.6, T2.5, T3.x, and T4.1.
+**Repo:** [github.com/searxng/searxng](https://github.com/searxng/searxng) | **Docs:** [docs.searxng.org](https://docs.searxng.org)
 
-**Install (Docker — easiest):**
+SearXNG is a free, self-hosted meta search engine. It's required for T1.6, T2.5, T3.x, and T4.1. You host it yourself — no API key, no rate limits.
+
+**Option 1 — Docker (recommended, 60 seconds):**
 ```bash
-docker run -d -p 4000:8080 --name searxng searxng/searxng
+docker run -d \
+  -p 4000:8080 \
+  --name searxng \
+  -e SEARXNG_SECRET=$(openssl rand -hex 32) \
+  searxng/searxng
 ```
+
+**Option 2 — Docker Compose (persistent config):**
+```bash
+git clone https://github.com/searxng/searxng-docker
+cd searxng-docker
+docker compose up -d
+```
+
+**Enable JSON output** (required for the eval — the API won't work without it):
+
+Edit `settings.yml` inside your SearXNG container or volume and ensure:
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Then restart: `docker restart searxng`
 
 **Verify it's working:**
 ```bash
-curl "http://localhost:4000/search?q=test&format=json" | python3 -m json.tool | head -5
+curl "http://localhost:4000/search?q=test&format=json" | python3 -m json.tool | head -10
+# Should return {"query": "test", "results": [...]}
 ```
 
-**Update the URL in the tests** — the script has a placeholder `YOUR_SEARXNG_HOST:PORT`. Before running, replace it:
+If you get `{"error": "..."}` or a 403, JSON output is not enabled yet.
+
+**Update the URL in the tests** — the script uses a placeholder `YOUR_SEARXNG_HOST:PORT`. Replace it before running:
 ```bash
-# Find all occurrences in model-eval.py
-grep -n "YOUR_SEARXNG_HOST" model-eval.py
-
-# Replace with your actual host:port (e.g. localhost:4000)
+# macOS
 sed -i '' 's|YOUR_SEARXNG_HOST:PORT|localhost:4000|g' model-eval.py
-```
 
-> **Note:** SearXNG must have JSON output enabled. The default Docker image has this enabled. If you get `"output_formats not configured"` errors, add `json` to `search.formats` in your SearXNG `settings.yml`.
+# Linux
+sed -i 's|YOUR_SEARXNG_HOST:PORT|localhost:4000|g' model-eval.py
+```
 
 ---
 
 ### ChromaDB setup
 
-ChromaDB is required for T1.4 and T3.2 (long-term memory store).
+**Repo:** [github.com/chroma-core/chroma](https://github.com/chroma-core/chroma) | **Docs:** [docs.trychroma.com](https://docs.trychroma.com)
 
-**Install and run:**
+ChromaDB is an open-source vector database used by OpenClaw for long-term conversational memory. Required for T1.4 (search) and T3.2 (write + read round-trip).
+
+**Install:**
 ```bash
 pip install chromadb
-chroma run --port 8100
 ```
 
-**Create the required collection:**
+**Run on port 8100** (the port OpenClaw and these tests expect):
+```bash
+chroma run --host 0.0.0.0 --port 8100
+```
+
+> If you want it to run persistently in the background, use a tool like `screen`, `tmux`, or create a systemd/launchd service.
+
+**Create the required collection** — the tests look for a collection named exactly `longterm_memory`. Create it once:
 ```bash
 python3 -c "
 import chromadb
@@ -154,41 +188,80 @@ print('Collection ready')
 "
 ```
 
-**Verify:**
+**Verify both the server and collection:**
 ```bash
+# Server up?
+curl http://localhost:8100/api/v2/heartbeat
+# {"nanosecond heartbeat": ...}
+
+# Collection exists?
 curl http://localhost:8100/api/v2/collections
-# Should show longterm_memory in the list
+# Should include "longterm_memory" in the response
 ```
+
+> **Note:** The tests use ChromaDB v2 API (`/api/v2/`). Make sure you're running ChromaDB 0.5.0 or later.
 
 ---
 
 ### QMD (memory_search) setup
 
-QMD is OpenClaw's workspace memory index, required for T1.3 and T4.1.
+**Package:** [@tobilu/qmd](https://www.npmjs.com/package/@tobilu/qmd) on npm
 
+QMD is OpenClaw's workspace memory system — BM25 + vector search over your markdown files. Required for T1.3 (`memory_search`) and T4.1 (full pipeline).
+
+**Install:**
 ```bash
 npm install -g @tobilu/qmd
-qmd update && qmd embed
 ```
 
-If you don't have a workspace to index, T1.3 will fail with "no results". Either skip it or add some `.md` files to your workspace and re-index.
+**Index your workspace:**
+```bash
+# Point at a directory containing .md files
+qmd update   # scans for markdown files
+qmd embed    # runs embeddings (downloads a ~329MB model on first run)
+```
+
+**Verify:**
+```bash
+qmd search "test query"
+# Should return results if you have indexed content
+```
+
+If T1.3 returns "no results found" — that's expected if your workspace has no content. Either skip this test or add a few `.md` files and re-run `qmd update && qmd embed`.
 
 ---
 
 ### gog (Google Sheets) setup
 
-Required for T1.8, T1.9, T3.1.
+**Package:** [@tobilu/gog](https://www.npmjs.com/package/@tobilu/gog) on npm
 
+`gog` is a Google Workspace CLI (Sheets, Drive, Gmail, Calendar). Required for T1.8, T1.9 (Sheets read/write), and T3.1 (cross-tool Sheets task). Uses OAuth — no API key needed, just a Google account.
+
+**Install:**
 ```bash
 npm install -g @tobilu/gog
-gog auth login   # follow OAuth prompt
 ```
 
-Create a throwaway sheet for the eval (don't use a real sheet — tests write data):
+**Authenticate:**
+```bash
+gog auth login
+# Opens browser for Google OAuth — sign in with the account that owns your sheet
+```
+
+**Create a throwaway test sheet** (don't point at a real sheet — tests write rows):
 ```bash
 gog sheets create "OpenClaw Eval Test Sheet"
-# Note the sheet ID from the output
-export EVAL_TEST_SHEET_ID=your-sheet-id
+# Output includes the sheet ID, e.g.:
+# Created: https://docs.google.com/spreadsheets/d/1abc.../edit
+#                                                  ^^^^^ this is EVAL_TEST_SHEET_ID
+
+export EVAL_TEST_SHEET_ID=1abc...
+```
+
+**Verify auth is working:**
+```bash
+gog sheets get $EVAL_TEST_SHEET_ID "Sheet1!A1"
+# Should return the cell value (empty is fine for a new sheet)
 ```
 
 ---
