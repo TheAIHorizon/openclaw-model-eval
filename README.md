@@ -42,12 +42,167 @@ Full write-up: [How to run OpenClaw with a local Qwen model](https://gist.github
 
 ---
 
-## Requirements
+## Requirements & Prerequisites
+
+### What every tier needs
 
 - [OpenClaw](https://openclaw.ai) installed and configured
 - `openclaw` CLI available in PATH
-- For Tier 1+: tools enabled in your OpenClaw agent (SearXNG, ChromaDB, gog, etc.)
-- For Tier 6: optional — tests use generic prompts, no internal data required
+- A configured agent (default: `main`) with at least one working model
+
+### Start here: Tier 0 only needs OpenClaw
+
+Tier 0 is pure reasoning — no tools, no external services. If you just want to check whether a model can think, start here:
+
+```bash
+python3 model-eval.py --tier 0 --label "reasoning-only"
+```
+
+No other setup required.
+
+---
+
+### Tool requirements by tier
+
+Each tier adds tools. Here's exactly what each one needs and how to verify it works before running.
+
+#### Tier 1 — Single Tool Calls
+
+| Test | Tool | What you need | Verify |
+|------|------|---------------|--------|
+| T1.1, T1.2 | `exec` (shell) | `exec` skill enabled in your agent | `openclaw exec --agent main "run: echo hello"` |
+| T1.3 | `memory_search` (QMD) | QMD installed + workspace indexed | `qmd search "test"` returns results |
+| T1.4 | `chromadb_search` | ChromaDB running on **port 8100**, collection `longterm_memory` exists | `curl http://localhost:8100/api/v2/collections` |
+| T1.5 | `web_fetch` | Internet access, `web_fetch` skill enabled | Skill in your agent's skill list |
+| T1.6 | `web_search` via SearXNG | SearXNG running — **see SearXNG setup below** | `curl http://YOUR_SEARXNG_HOST:PORT/search?q=test&format=json` |
+| T1.7 | `exec` + remindctl | **macOS only** — Reminders app + remindctl or equivalent | `remindctl list` returns output |
+| T1.8, T1.9 | `gog` (Google Sheets) | `gog` CLI installed + Google account authenticated + `EVAL_TEST_SHEET_ID` set | `gog sheets get $EVAL_TEST_SHEET_ID "Sheet1!A1"` |
+
+**Skip tests you can't support** using `--test` to run only specific IDs, or `--fast` to skip anything that requires external services.
+
+#### Tier 2 — Multi-Step
+
+- T2.1–T2.3: Only `exec` needed
+- T2.4: `web_fetch` (internet)
+- T2.5: SearXNG (see below)
+
+#### Tier 3 — Cross-Tool Agentic
+
+- T3.1: `gog` (Google Sheets read + write)
+- T3.2: ChromaDB (write + read round-trip)
+
+Both tests are **destructive** (write data) — requires `--all` flag and `EVAL_TEST_SHEET_ID` set.
+
+#### Tier 4 — Full Pipeline
+
+All three: SearXNG + `memory_search` (QMD) + `exec`. This is the most demanding tier.
+
+#### Tier 5 — Adversarial
+
+No external tools. Pure model behavior — ambiguity, conflict handling, refusal. Runs anywhere Tier 0 runs.
+
+#### Tier 6 — Domain-Specific
+
+No external tools. Structured reasoning tasks. Runs anywhere Tier 0 runs.
+
+---
+
+### SearXNG setup
+
+SearXNG is a self-hosted search engine required for T1.6, T2.5, T3.x, and T4.1.
+
+**Install (Docker — easiest):**
+```bash
+docker run -d -p 4000:8080 --name searxng searxng/searxng
+```
+
+**Verify it's working:**
+```bash
+curl "http://localhost:4000/search?q=test&format=json" | python3 -m json.tool | head -5
+```
+
+**Update the URL in the tests** — the script has a placeholder `YOUR_SEARXNG_HOST:PORT`. Before running, replace it:
+```bash
+# Find all occurrences in model-eval.py
+grep -n "YOUR_SEARXNG_HOST" model-eval.py
+
+# Replace with your actual host:port (e.g. localhost:4000)
+sed -i '' 's|YOUR_SEARXNG_HOST:PORT|localhost:4000|g' model-eval.py
+```
+
+> **Note:** SearXNG must have JSON output enabled. The default Docker image has this enabled. If you get `"output_formats not configured"` errors, add `json` to `search.formats` in your SearXNG `settings.yml`.
+
+---
+
+### ChromaDB setup
+
+ChromaDB is required for T1.4 and T3.2 (long-term memory store).
+
+**Install and run:**
+```bash
+pip install chromadb
+chroma run --port 8100
+```
+
+**Create the required collection:**
+```bash
+python3 -c "
+import chromadb
+client = chromadb.HttpClient(host='localhost', port=8100)
+client.get_or_create_collection('longterm_memory')
+print('Collection ready')
+"
+```
+
+**Verify:**
+```bash
+curl http://localhost:8100/api/v2/collections
+# Should show longterm_memory in the list
+```
+
+---
+
+### QMD (memory_search) setup
+
+QMD is OpenClaw's workspace memory index, required for T1.3 and T4.1.
+
+```bash
+npm install -g @tobilu/qmd
+qmd update && qmd embed
+```
+
+If you don't have a workspace to index, T1.3 will fail with "no results". Either skip it or add some `.md` files to your workspace and re-index.
+
+---
+
+### gog (Google Sheets) setup
+
+Required for T1.8, T1.9, T3.1.
+
+```bash
+npm install -g @tobilu/gog
+gog auth login   # follow OAuth prompt
+```
+
+Create a throwaway sheet for the eval (don't use a real sheet — tests write data):
+```bash
+gog sheets create "OpenClaw Eval Test Sheet"
+# Note the sheet ID from the output
+export EVAL_TEST_SHEET_ID=your-sheet-id
+```
+
+---
+
+### Quickstart: what to run based on your setup
+
+| Your setup | Command |
+|------------|---------|
+| Just OpenClaw, no extras | `python3 model-eval.py --tier 0 5 6 --label "baseline"` |
+| OpenClaw + exec skill | `python3 model-eval.py --tier 0 1 2 --fast --label "no-network"` |
+| Full stack (SearXNG + ChromaDB + QMD) | `python3 model-eval.py --tier 0 1 2 3 4 --label "full"` |
+| Everything including writes | `python3 model-eval.py --all --label "complete"` |
+
+The `--fast` flag skips any test that requires an external network call (SearXNG, web_fetch, Sheets).
 
 ---
 
@@ -85,28 +240,6 @@ python3 model-eval.py --compare run-id-1 run-id-2
 ---
 
 ## Configuration
-
-### Google Sheets (Tier 1 write test, Tier 3 cross-tool)
-
-Set `EVAL_TEST_SHEET_ID` to a throwaway sheet you control:
-
-```bash
-EVAL_TEST_SHEET_ID=your-sheet-id python3 model-eval.py --tier 1 3 --all
-```
-
-Create a throwaway sheet first:
-```bash
-GOG_ACCOUNT=your@gmail.com gog sheets create "OpenClaw Eval Test Sheet"
-```
-
-### SearXNG
-
-Tier 2, 3, and 4 use SearXNG for web search. Update the URL in the test prompts if your instance runs elsewhere:
-
-```python
-# Default in tests: http://192.168.254.202:8888
-# Change to your instance URL
-```
 
 ### --model flag
 
